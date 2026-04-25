@@ -1,0 +1,80 @@
+version: '3.9'
+
+services:
+  # ─── Application ─────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: edgecache-api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - edgecache-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/v1/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ─── Redis ───────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: edgecache-redis
+    restart: unless-stopped
+    # Password is set via command; in production use a secrets manager instead
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-changeme}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+      --loglevel warning
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - edgecache-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ─── Redis Commander (dev only — disable in production) ──────────────
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: edgecache-redis-ui
+    restart: unless-stopped
+    profiles:
+      - dev
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0:${REDIS_PASSWORD:-changeme}
+    ports:
+      - "8081:8081"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - edgecache-network
+
+volumes:
+  redis-data:
+    driver: local
+
+networks:
+  edgecache-network:
+    driver: bridge
